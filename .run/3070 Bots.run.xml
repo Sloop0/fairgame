@@ -1,0 +1,14 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="3070 Bots" type="Multirun" factoryName="Multirun" singleton="false" separateTabs="false" reuseTabsWithFailures="true" startOneByOne="true" markFailedProcess="true" hideSuccessProcess="false" delayTime="1.0">
+    <runConfiguration name="killdupes" type="Python" />
+    <runConfiguration name="amaz1" type="Python" />
+    <runConfiguration name="amaz2" type="Python" />
+    <runConfiguration name="amaz3" type="Python" />
+    <runConfiguration name="amaz4" type="Python" />
+    <runConfiguration name="amaz5" type="Python" />
+    <runConfiguration name="amaz6" type="Python" />
+    <runConfiguration name="amaz7" type="Python" />
+    <runConfiguration name="hidebots" type="Python" />
+    <method v="2" />
+  </configuration>
+</component>

@@ -1,0 +1,9 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Bots" type="CompoundRunConfigurationType">
+    <toRun name="amaz3" type="PythonConfigurationType" />
+    <toRun name="amaz1" type="PythonConfigurationType" />
+    <toRun name="amaz2" type="PythonConfigurationType" />
+    <toRun name="amaz4" type="PythonConfigurationType" />
+    <method v="2" />
+  </configuration>
+</component>
