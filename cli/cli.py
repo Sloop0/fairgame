@@ -147,6 +147,16 @@ def main():
     default=False,
     help="Will attempt to click ship to address button. USE AT YOUR OWN RISK!",
 )
+@click.option(
+    "--configpath",
+    default="config/amazon_config.json",
+    help="Can be set to change the path to your config file",
+)
+@click.option(
+    "--prodasin",
+    default="B08LW46GH2",
+    help="Select the ASIN of the product you would like to search for",
+)
 @notify_on_crash
 def amazon(
     no_image,
@@ -164,6 +174,8 @@ def amazon(
     p,
     log_stock_check,
     shipping_bypass,
+    configpath,
+    prodasin
 ):
 
     notification_handler.sound_enabled = not disable_sound
@@ -184,6 +196,8 @@ def amazon(
         no_image=no_image,
         log_stock_check=log_stock_check,
         shipping_bypass=shipping_bypass,
+        configpath=configpath,
+        prodasin=prodasin
     )
     try:
         amzn_obj.run(delay=delay, test=test)

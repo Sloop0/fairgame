@@ -6,7 +6,7 @@ import random
 import time
 from datetime import datetime
 import fileinput
-
+import ctypes
 import psutil
 import stdiomask
 from amazoncaptcha import AmazonCaptcha
@@ -31,7 +31,6 @@ AMAZON_URLS = {
 }
 CHECKOUT_URL = "https://{domain}/gp/cart/desktop/go-to-checkout.html/ref=ox_sc_proceed?partialCheckoutCart=1&isToBeGiftWrappedBefore=0&proceedToRetailCheckout=Proceed+to+checkout&proceedToCheckout=1&cartInitiateId={cart_id}"
 
-AUTOBUY_CONFIG_PATH = "config/amazon_config.json"
 CREDENTIAL_FILE = "config/amazon_credentials.json"
 
 SIGN_IN_TEXT = [
@@ -64,7 +63,8 @@ HOME_PAGE_TITLES = [
     "Amazon.de: Günstige Preise für Elektronik & Foto, Filme, Musik, Bücher, Games, Spielzeug & mehr",
     "Amazon.fr : livres, DVD, jeux vidéo, musique, high-tech, informatique, jouets, vêtements, chaussures, sport, bricolage, maison, beauté, puériculture, épicerie et plus encore !",
     "Amazon.it: elettronica, libri, musica, fashion, videogiochi, DVD e tanto altro",
-    "Amazon.nl: Groot aanbod, kleine prijzen in o.a. Elektronica, boeken, sport en meer",  # this site doesn't work anymore
+    "Amazon.nl: Groot aanbod, kleine prijzen in o.a. Elektronica, boeken, sport en meer",
+    # this site doesn't work anymore
     "Amazon.se: Låga priser på Elektronik, Böcker, Sportutrustning & mer",  # this site doesn't work anymore
 ]
 SHOPING_CART_TITLES = [
@@ -186,27 +186,30 @@ MAX_CHECKOUT_BUTTON_WAIT = 3  # integers only
 DEFAULT_REFRESH_DELAY = 3
 DEFAULT_MAX_TIMEOUT = 10
 DEFAULT_MAX_URL_FAIL = 5
-
+saidnooffer = 0
 
 class Amazon:
     def __init__(
-        self,
-        notification_handler,
-        headless=False,
-        checkshipping=False,
-        detailed=False,
-        used=False,
-        single_shot=False,
-        no_screenshots=False,
-        disable_presence=False,
-        slow_mode=False,
-        encryption_pass=None,
-        no_image=False,
-        log_stock_check=False,
-        shipping_bypass=False,
+            self,
+            notification_handler,
+            headless=False,
+            checkshipping=False,
+            detailed=False,
+            used=False,
+            single_shot=False,
+            no_screenshots=False,
+            disable_presence=False,
+            slow_mode=False,
+            encryption_pass=None,
+            no_image=False,
+            log_stock_check=False,
+            shipping_bypass=False,
+            configpath="config/amazon_config.json",
+            prodasin="B08LW46GH2",
+            minprice=9999,
+            namedisplayed=1
     ):
         self.notification_handler = notification_handler
-        self.asin_list = []
         self.reserve_min = []
         self.reserve_max = []
         self.checkshipping = checkshipping
@@ -227,7 +230,10 @@ class Amazon:
         self.no_image = no_image
         self.log_stock_check = log_stock_check
         self.shipping_bypass = shipping_bypass
-
+        self.configpath = configpath
+        self.minprice = minprice
+        self.prodasin = prodasin
+        self.namedisplayed = namedisplayed
         presence.enabled = not disable_presence
         presence.start_presence()
 
@@ -256,18 +262,15 @@ class Amazon:
             self.username = credential["username"]
             self.password = credential["password"]
 
-        if os.path.exists(AUTOBUY_CONFIG_PATH):
-            with open(AUTOBUY_CONFIG_PATH) as json_file:
+        if os.path.exists(configpath):
+            with open(configpath) as json_file:
                 try:
                     config = json.load(json_file)
-                    self.asin_groups = int(config["asin_groups"])
                     self.amazon_website = config.get(
                         "amazon_website", "smile.amazon.com"
                     )
-                    for x in range(self.asin_groups):
-                        self.asin_list.append(config[f"asin_list_{x + 1}"])
-                        self.reserve_min.append(float(config[f"reserve_min_{x + 1}"]))
-                        self.reserve_max.append(float(config[f"reserve_max_{x + 1}"]))
+                    self.reserve_min.append(float(config[f"reserve_min_1"]))
+                    self.reserve_max.append(float(config[f"reserve_max_1"]))
                     # assert isinstance(self.asin_list, list)
                 except Exception as e:
                     log.error(f"{e} is missing")
@@ -356,9 +359,9 @@ class Amazon:
                     pass
                 # if successful after running navigate pages, remove the asin_list from the list
                 if (
-                    not self.try_to_checkout
-                    and not self.single_shot
-                    and self.great_success
+                        not self.try_to_checkout
+                        and not self.single_shot
+                        and self.great_success
                 ):
                     self.remove_asin_list(asin)
                 # checkout loop limiters
@@ -373,7 +376,7 @@ class Amazon:
                     self.fail_to_checkout_note()
                     self.try_to_checkout = False
             # if no items left it list, let loop end
-            if not self.asin_list:
+            if not self.prodasin:
                 keep_going = False
         runtime = time.time() - self.start_time
         log.info(f"FairGame bot ran for {runtime} seconds.")
@@ -524,15 +527,13 @@ class Amazon:
     def run_asins(self, delay):
         found_asin = False
         while not found_asin:
-            for i in range(len(self.asin_list)):
-                for asin in self.asin_list[i]:
-                    # start_time = time.time()
-                    if self.log_stock_check:
-                        log.info(f"Checking ASIN: {asin}.")
-                    if self.check_stock(asin, self.reserve_min[i], self.reserve_max[i]):
-                        return asin
-                    # log.info(f"check time took {time.time()-start_time} seconds")
-                    time.sleep(delay)
+            # start_time = time.time()
+            if self.log_stock_check:
+                log.info(f"Checking ASIN: {self.prodasin}.")
+            if self.check_stock(self.prodasin, self.reserve_min[0], self.reserve_max[0]):
+                return self.prodasin
+            #log.info(f"check time took {time.time()-start_time} seconds")
+            time.sleep(delay)
 
     @debug
     def check_stock(self, asin, reserve_min, reserve_max, retry=0):
@@ -612,17 +613,45 @@ class Amazon:
                 )
             except sel_exceptions.NoSuchElementException:
                 pass
-
             if test and (test.text in NO_SELLERS):
                 return False
+            nooffer = self.driver.find_elements_by_xpath(
+                '//*[@class="a-text-bold aod-no-offer-normal-font"]'
+            )
+            global saidnooffer
+            if nooffer:
+                if not saidnooffer:
+                    log.info(f"No offers available for {asin}, continuing.")
+                    saidnooffer = 1
+                return False
+            thesesellers = self.driver.find_elements_by_link_text("these sellers")
+            if thesesellers:
+                try:
+                    thesesellers[0].click()
+                    time.sleep(self.page_wait_delay())
+                except Exception as e:
+                    continue
             if time.time() > timeout:
                 log.info(f"failed to load page for {asin}, going to next ASIN")
                 return False
 
         timeout = self.get_timeout()
+
+        while self.namedisplayed:
+            try:
+                prodname = self.driver.find_element_by_id("productTitle").text.strip()
+            except Exception as e:
+                prodname = self.driver.find_element_by_tag_name('h1').text.strip()
+            self.namedisplayed = 0
+            log.info(f'Beginning search for product {prodname} with asin {asin}.')
         while True:
             prices = self.driver.find_elements_by_xpath(
                 '//*[@class="a-size-large a-color-price olpOfferPrice a-text-bold"]'
+            )
+            if prices:
+                break
+            prices = self.driver.find_elements_by_xpath(
+                '//*[@class="a-price-whole"]'
             )
             if prices:
                 break
@@ -667,13 +696,16 @@ class Amazon:
                 return False
             if ship_float is None or not self.checkshipping:
                 ship_float = 0
-
+            totalprice = ship_float + price_float
+            if totalprice < self.minprice:
+                self.minprice = totalprice
+                log.info(f"{asin} was found for a new minimum price of ${totalprice}.")
             if (
-                (ship_float + price_float) <= reserve_max
-                or math.isclose((price_float + ship_float), reserve_max, abs_tol=0.01)
+                    (totalprice) <= reserve_max
+                    or math.isclose((totalprice), reserve_max, abs_tol=0.01)
             ) and (
-                (ship_float + price_float) >= reserve_min
-                or math.isclose((price_float + ship_float), reserve_min, abs_tol=0.01)
+                    (ship_float + price_float) >= reserve_min
+                    or math.isclose((price_float + ship_float), reserve_min, abs_tol=0.01)
             ):
                 log.info("Item in stock and in reserve range!")
                 log.info("clicking add to cart")
@@ -715,12 +747,9 @@ class Amazon:
     # search lists of asin lists, and remove the first list that matches provided asin
     @debug
     def remove_asin_list(self, asin):
-        for i in range(len(self.asin_list)):
-            if asin in self.asin_list[i]:
-                self.asin_list.pop(i)
-                self.reserve_max.pop(i)
-                self.reserve_min.pop(i)
-                break
+        prodasin = None
+        self.reserve_max.pop(0)
+        self.reserve_min.pop(0)
 
     # checkout page navigator
     @debug
@@ -1108,7 +1137,7 @@ class Amazon:
             self.try_to_checkout = False
             self.great_success = True
             if self.single_shot:
-                self.asin_list = []
+                self.prodasin = None
         else:
             log.info(f"Clicking Button {button.text} to place order")
             button.click()
@@ -1120,7 +1149,7 @@ class Amazon:
         self.send_notification("Order placed.", "order-placed", self.take_screenshots)
         self.great_success = True
         if self.single_shot:
-            self.asin_list = []
+            self.prodasin = None
         self.try_to_checkout = False
         log.info(f"checkout completed in {time.time() - self.start_time_atc} seconds")
 
@@ -1145,7 +1174,7 @@ class Amazon:
         current_page = self.driver.title
         try:
             if self.driver.find_element_by_xpath(
-                '//form[@action="/errors/validateCaptcha"]'
+                    '//form[@action="/errors/validateCaptcha"]'
             ):
                 try:
                     log.info("Stuck on a captcha... Lets try to solve it.")
@@ -1229,7 +1258,7 @@ class Amazon:
     def wait_for_page_change(self, page_title, timeout=3):
         time_to_end = self.get_timeout(timeout=timeout)
         while time.time() < time_to_end and (
-            self.driver.title == page_title or not self.driver.title
+                self.driver.title == page_title or not self.driver.title
         ):
             pass
         if self.driver.title != page_title:
@@ -1292,7 +1321,7 @@ class Amazon:
 
     def show_config(self):
         log.info(f"{'=' * 50}")
-        log.info(f"Starting Amazon ASIN Hunt for {len(self.asin_list)} Products with:")
+        log.info(f"Starting Amazon ASIN Hunt for 1 Product with:")
         log.info(f"--Delay of {self.refresh_delay} seconds")
         if self.headless:
             log.info(f"--Headless doesn't work!")
@@ -1328,9 +1357,8 @@ class Amazon:
                 f"bot may still fail during checkout if defaults are not set on Amazon's site."
             )
             log.warning(f"{'=' * 50}")
-        for idx, asins in enumerate(self.asin_list):
             log.info(
-                f"--Looking for {len(asins)} ASINs between {self.reserve_min[idx]:.2f} and {self.reserve_max[idx]:.2f}"
+                f"--Looking for 1 ASIN between {self.reserve_min[0]:.2f} and {self.reserve_max[0]:.2f}"
             )
         log.info(f"{'=' * 50}")
 
@@ -1347,13 +1375,14 @@ class Amazon:
             prefs = {
                 "profile.password_manager_enabled": False,
                 "credentials_enable_service": False,
+                "window-workspace": 1
             }
             if self.no_image:
                 prefs["profile.managed_default_content_settings.images"] = 2
             else:
                 prefs["profile.managed_default_content_settings.images"] = 0
             options.add_experimental_option("prefs", prefs)
-            options.add_argument(f"user-data-dir=.profile-amz")
+            options.add_argument(f".profile-amz-{self.prodasin}")
             if not self.slow_mode:
                 options.set_capability("pageLoadStrategy", "none")
 
@@ -1362,7 +1391,7 @@ class Amazon:
         # Delete crashed, so restore pop-up doesn't happen
         path_to_prefs = os.path.join(
             os.path.dirname(os.path.abspath("__file__")),
-            ".profile-amz",
+            f".profile-amz-{self.prodasin}",
             "Default",
             "Preferences",
         )
@@ -1375,7 +1404,7 @@ class Amazon:
         try:
             self.driver = webdriver.Chrome(executable_path=binary_path, options=options)
             self.wait = WebDriverWait(self.driver, 10)
-            self.get_webdriver_pids()
+            mypid = self.get_webdriver_pids()
         except Exception as e:
             log.error(e)
             log.error(
@@ -1386,7 +1415,8 @@ class Amazon:
             )
 
             return False
-
+        # vdesks = ctypes.WinDLL("g:\\nvidia-bot\\VirtualDesktopAccessor.dll")
+        # vdesks.MoveWindowToDesktopNumber(vdesks.ViewGetFocused(), 1)
         return True
 
     def delete_driver(self):
