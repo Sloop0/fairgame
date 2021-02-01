@@ -1,7 +1,6 @@
 import coloredlogs
 import logging
 import os
-
 from logging import handlers
 
 LOG_DIR = "logs"
@@ -15,7 +14,7 @@ if not os.path.exists(LOG_DIR):
 LOG_FILE_PATH = os.path.join(LOG_DIR, LOG_FILE_NAME)
 
 # This check *must* be executed before logging.basicConfig because, at least on Windows,
-# basicConfig creates a lock on the log file that prevents renaming.  Possibly a workaround
+# basicConfig creates a lock onm the log file that prevents renaming.  Possibly a workaround
 # but putting this first seems to dodge the issue
 if os.path.isfile(LOG_FILE_PATH):
     # Create a transient handler to do the rollover for us on startup.  This won't
@@ -31,7 +30,7 @@ if os.path.isfile(LOG_FILE_PATH):
 logging.basicConfig(
     filename=LOG_FILE_PATH,
     level=logging.DEBUG,
-    format='%(levelname)s: "%(asctime)s - %(message)s',
+    format='%(levelname)s-%(threadName)s: "%(asctime)s - %(message)s',
 )
 
 log = logging.getLogger("fairgame")
@@ -40,9 +39,9 @@ log.setLevel(logging.DEBUG)
 LOGLEVEL = os.environ.get("LOGLEVEL", "INFO").upper()
 stream_handler = logging.StreamHandler()
 stream_handler.setFormatter(
-    logging.Formatter('%(levelname)s: "%(asctime)s - %(message)s')
+    logging.Formatter('%(levelname)s-%(threadName)s: "%(asctime)s - %(message)s')
 )
 
 log.addHandler(stream_handler)
 
-coloredlogs.install(LOGLEVEL, logger=log)
+coloredlogs.install(LOGLEVEL, logger=log, fmt='%(asctime)s %(threadName)s %(levelname)s %(message)s')

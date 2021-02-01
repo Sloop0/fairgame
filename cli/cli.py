@@ -1,6 +1,13 @@
+from threading import current_thread
+current_thread().name = 'Handler'
+import os
+import json
+from utils.encryption import create_encrypted_config, load_encrypted_config
 from datetime import datetime
 from functools import wraps
 from signal import signal, SIGINT
+import stdiomask
+import concurrent.futures
 
 try:
     import click
@@ -17,11 +24,14 @@ import time
 from notifications.notifications import NotificationHandler, TIME_FORMAT
 from stores.amazon import Amazon
 from stores.bestbuy import BestBuyHandler
-from utils import selenium_utils
 from utils.logger import log
 from utils.version import check_version
 
+from hidebots import hidebots
+from killdupes import killdupes
+
 notification_handler = NotificationHandler()
+CREDENTIAL_FILE = "config/amazon_credentials.json"
 
 try:
     check_version()
@@ -47,6 +57,13 @@ def notify_on_crash(func):
 
     return decorator
 
+def await_credential_input():
+    username = input("Amazon login ID: ")
+    password = stdiomask.getpass(prompt="Amazon Password: ")
+    return {
+        "username": username,
+        "password": password,
+    }
 
 @click.group()
 def main():
@@ -152,11 +169,6 @@ def main():
     default="config/amazon_config.json",
     help="Can be set to change the path to your config file",
 )
-@click.option(
-    "--prodasin",
-    default="B08LW46GH2",
-    help="Select the ASIN of the product you would like to search for",
-)
 @notify_on_crash
 def amazon(
     no_image,
@@ -174,10 +186,59 @@ def amazon(
     p,
     log_stock_check,
     shipping_bypass,
-    configpath,
-    prodasin
+    configpath
+
 ):
 
+    if not os.path.exists("screenshots"):
+        try:
+            os.makedirs("screenshots")
+        except:
+            raise
+
+    if not os.path.exists("html_saves"):
+        try:
+            os.makedirs("html_saves")
+        except:
+            raise
+    if os.path.exists(CREDENTIAL_FILE):
+        credential = load_encrypted_config(CREDENTIAL_FILE, p)
+        username = credential["username"]
+        password = credential["password"]
+    else:
+        log.info("No credential file found, let's make one")
+        log.info("NOTE: DO NOT SAVE YOUR CREDENTIALS IN CHROME, CLICK NEVER!")
+        credential = await_credential_input()
+        create_encrypted_config(credential, CREDENTIAL_FILE)
+        username = credential["username"]
+        amazon.password = credential["password"]
+    asin_list = []
+    reserve_min = []
+    reserve_max = []
+    if os.path.exists(configpath):
+        with open(configpath) as json_file:
+            try:
+                config = json.load(json_file)
+                asin_groups = int(config["asin_groups"])
+                amazon_website = config.get(
+                    "amazon_website", "smile.amazon.com"
+                )
+                for x in range(asin_groups):
+                    asin_list.append(config[f"asin_list_{x + 1}"])
+                    reserve_min.append(float(config[f"reserve_min_1"]))
+                    reserve_max.append(float(config[f"reserve_max_1"]))
+                # assert isinstance(self.asin_list, list)
+            except Exception as e:
+                log.error(f"{e} is missing")
+                log.error(
+                    "amazon_config.json file not formatted properly: https://github.com/Hari-Nagarajan/fairgame/wiki/Usage#json-configuration"
+                )
+                exit(0)
+    else:
+        log.error(
+            "No config file found, see here on how to fix this: https://github.com/Hari-Nagarajan/fairgame/wiki/Usage#json-configuration"
+        )
+        exit(0)
     notification_handler.sound_enabled = not disable_sound
     if not notification_handler.sound_enabled:
         log.info("Local sounds have been disabled.")
@@ -192,15 +253,28 @@ def amazon(
         no_screenshots=no_screenshots,
         disable_presence=disable_presence,
         slow_mode=slow_mode,
-        encryption_pass=p,
         no_image=no_image,
         log_stock_check=log_stock_check,
         shipping_bypass=shipping_bypass,
         configpath=configpath,
-        prodasin=prodasin
+        test=test,
+        delay=delay,
+        reserve_min=reserve_min,
+        reserve_max=reserve_max,
+        amazon_website=amazon_website,
+        username=username,
+        password=password
     )
+
+    # Create necessary sub-directories if they don't exist
+
+    killdupes()
     try:
-        amzn_obj.run(delay=delay, test=test)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
+            for asin in asin_list[0]:
+                executor.submit(amzn_obj.run, asin)
+            hidebots()
+
     except RuntimeError:
         del amzn_obj
         log.error("Exiting Program...")

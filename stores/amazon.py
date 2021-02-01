@@ -1,14 +1,12 @@
-import json
 import math
 import os
 import platform
-import random
 import time
 from datetime import datetime
 import fileinput
-import ctypes
 import psutil
-import stdiomask
+from threading import current_thread
+
 from amazoncaptcha import AmazonCaptcha
 from chromedriver_py import binary_path  # this will get you the path variable
 from furl import furl
@@ -20,7 +18,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 from utils import discord_presence as presence
 from utils.debugger import debug
-from utils.encryption import create_encrypted_config, load_encrypted_config
+
 from utils.logger import log
 from utils.selenium_utils import options, enable_headless
 
@@ -186,32 +184,39 @@ MAX_CHECKOUT_BUTTON_WAIT = 3  # integers only
 DEFAULT_REFRESH_DELAY = 3
 DEFAULT_MAX_TIMEOUT = 10
 DEFAULT_MAX_URL_FAIL = 5
-saidnooffer = 0
+
+
 
 class Amazon:
     def __init__(
-            self,
-            notification_handler,
-            headless=False,
-            checkshipping=False,
-            detailed=False,
-            used=False,
-            single_shot=False,
-            no_screenshots=False,
-            disable_presence=False,
-            slow_mode=False,
-            encryption_pass=None,
-            no_image=False,
-            log_stock_check=False,
-            shipping_bypass=False,
-            configpath="config/amazon_config.json",
-            prodasin="B08LW46GH2",
-            minprice=9999,
-            namedisplayed=1
+        self,
+        notification_handler,
+        headless=False,
+        checkshipping=False,
+        detailed=False,
+        used=False,
+        single_shot=False,
+        no_screenshots=False,
+        disable_presence=False,
+        slow_mode=False,
+        encryption_pass=None,
+        no_image=False,
+        log_stock_check=False,
+        shipping_bypass=False,
+        configpath="config/amazon_config.json",
+        minprice=9999,
+        test=False,
+        delay=3,
+        reserve_min=0,
+        reserve_max=0,
+        amazon_website=None,
+        username=None,
+        password=None
     ):
         self.notification_handler = notification_handler
         self.reserve_min = []
         self.reserve_max = []
+        self.asin_list = []
         self.checkshipping = checkshipping
         self.button_xpaths = BUTTON_XPATHS
         self.detailed = detailed
@@ -223,7 +228,8 @@ class Amazon:
         self.webdriver_child_pids = []
         self.driver = None
         self.refresh_delay = DEFAULT_REFRESH_DELAY
-        self.testing = False
+        self.delay = delay
+        self.test = test
         self.slow_mode = slow_mode
         self.setup_driver = True
         self.headless = headless
@@ -232,78 +238,27 @@ class Amazon:
         self.shipping_bypass = shipping_bypass
         self.configpath = configpath
         self.minprice = minprice
-        self.prodasin = prodasin
-        self.namedisplayed = namedisplayed
+        self.namedisplayed = 1
+        self.saidnooffer = 0
+        self.reserve_min = reserve_min
+        self.reserve_max = reserve_max
+        self.amazon_website = amazon_website
+        self.username = username
+        self.password = password
         presence.enabled = not disable_presence
         presence.start_presence()
-
-        # Create necessary sub-directories if they don't exist
-        if not os.path.exists("screenshots"):
-            try:
-                os.makedirs("screenshots")
-            except:
-                raise
-
-        if not os.path.exists("html_saves"):
-            try:
-                os.makedirs("html_saves")
-            except:
-                raise
-
-        if os.path.exists(CREDENTIAL_FILE):
-            credential = load_encrypted_config(CREDENTIAL_FILE, encryption_pass)
-            self.username = credential["username"]
-            self.password = credential["password"]
-        else:
-            log.info("No credential file found, let's make one")
-            log.info("NOTE: DO NOT SAVE YOUR CREDENTIALS IN CHROME, CLICK NEVER!")
-            credential = self.await_credential_input()
-            create_encrypted_config(credential, CREDENTIAL_FILE)
-            self.username = credential["username"]
-            self.password = credential["password"]
-
-        if os.path.exists(configpath):
-            with open(configpath) as json_file:
-                try:
-                    config = json.load(json_file)
-                    self.amazon_website = config.get(
-                        "amazon_website", "smile.amazon.com"
-                    )
-                    self.reserve_min.append(float(config[f"reserve_min_1"]))
-                    self.reserve_max.append(float(config[f"reserve_max_1"]))
-                    # assert isinstance(self.asin_list, list)
-                except Exception as e:
-                    log.error(f"{e} is missing")
-                    log.error(
-                        "amazon_config.json file not formatted properly: https://github.com/Hari-Nagarajan/fairgame/wiki/Usage#json-configuration"
-                    )
-                    exit(0)
-        else:
-            log.error(
-                "No config file found, see here on how to fix this: https://github.com/Hari-Nagarajan/fairgame/wiki/Usage#json-configuration"
-            )
-            exit(0)
-
-        if not self.create_driver():
-            exit(1)
 
         for key in AMAZON_URLS.keys():
             AMAZON_URLS[key] = AMAZON_URLS[key].format(domain=self.amazon_website)
 
-    @staticmethod
-    def await_credential_input():
-        username = input("Amazon login ID: ")
-        password = stdiomask.getpass(prompt="Amazon Password: ")
-        return {
-            "username": username,
-            "password": password,
-        }
-
-    def run(self, delay=DEFAULT_REFRESH_DELAY, test=False):
-        self.testing = test
-        self.refresh_delay = delay
+    def run(self, prodasin):
+        current_thread().name = prodasin
+        log.getLogger("fairgame")
+        if not self.create_driver():
+            exit(1)
+        self.prodasin = prodasin
+        log.info(self.prodasin)
         self.show_config()
-
         log.info("Waiting for home page.")
         while True:
             try:
@@ -343,7 +298,7 @@ class Amazon:
         log.info("Checking stock for items.")
 
         while keep_going:
-            asin = self.run_asins(delay)
+            asin = self.run_asins(self.delay)
             # found something in stock and under reserve
             # initialize loop limiter variables
             self.try_to_checkout = True
@@ -353,7 +308,7 @@ class Amazon:
             self.great_success = False
             while self.try_to_checkout:
                 try:
-                    self.navigate_pages(test)
+                    self.navigate_pages(self.test)
                 # if for some reason page transitions in the middle of checking elements, don't break the program
                 except sel_exceptions.StaleElementReferenceException:
                     pass
@@ -532,7 +487,7 @@ class Amazon:
                 log.info(f"Checking ASIN: {self.prodasin}.")
             if self.check_stock(self.prodasin, self.reserve_min[0], self.reserve_max[0]):
                 return self.prodasin
-            #log.info(f"check time took {time.time()-start_time} seconds")
+            # log.info(f"check time took {time.time()-start_time} seconds")
             time.sleep(delay)
 
     @debug
@@ -618,11 +573,10 @@ class Amazon:
             nooffer = self.driver.find_elements_by_xpath(
                 '//*[@class="a-text-bold aod-no-offer-normal-font"]'
             )
-            global saidnooffer
             if nooffer:
-                if not saidnooffer:
+                if not self.saidnooffer:
                     log.info(f"No offers available for {asin}, continuing.")
-                    saidnooffer = 1
+                    self.saidnooffer = 1
                 return False
             thesesellers = self.driver.find_elements_by_link_text("these sellers")
             if thesesellers:
@@ -751,7 +705,8 @@ class Amazon:
         self.reserve_max.pop(0)
         self.reserve_min.pop(0)
 
-    # checkout page navigator
+        # checkout page navigator
+
     @debug
     def navigate_pages(self, test):
         # delay to wait for page load
@@ -1322,7 +1277,7 @@ class Amazon:
     def show_config(self):
         log.info(f"{'=' * 50}")
         log.info(f"Starting Amazon ASIN Hunt for 1 Product with:")
-        log.info(f"--Delay of {self.refresh_delay} seconds")
+        log.info(f"--Delay of {self.delay} seconds")
         if self.headless:
             log.info(f"--Headless doesn't work!")
         if self.used:
@@ -1341,7 +1296,7 @@ class Amazon:
             log.info(f"--Detailed screenshots/notifications is enabled")
         if self.log_stock_check:
             log.info(f"--Additional stock check logging enabled")
-        if self.testing:
+        if self.test:
             log.warning(f"--Testing Mode.  NO Purchases will be made.")
         if self.slow_mode:
             log.warning(f"--Slow-mode enabled. Pages will fully load before execution.")
@@ -1453,3 +1408,4 @@ def get_timestamp_filename(name, extension):
         return name + "_" + date + extension
     else:
         return name + "_" + date + "." + extension
+
