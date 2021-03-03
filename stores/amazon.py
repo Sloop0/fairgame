@@ -25,15 +25,19 @@ import platform
 import time
 from contextlib import contextmanager
 from datetime import datetime
+import multiprocessing
 from enum import Enum
 
 import psutil
+import killdupes
+import hidebots
+import destroybots
 from amazoncaptcha import AmazonCaptcha
 from chromedriver_py import binary_path  # this will get you the path variable
 from furl import furl
 from lxml import html
 from price_parser import parse_price, Price
-from pypresence import exceptions as pyexceptions
+# from pypresence import exceptions as pyexceptions
 from selenium import webdriver
 from selenium.common import exceptions as sel_exceptions
 from selenium.webdriver.common.by import By
@@ -41,8 +45,9 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
+import win32api
 
-from utils import discord_presence as presence
+# from utils import discord_presence as presence
 from utils.debugger import debug
 from utils.logger import log
 from utils.selenium_utils import options, enable_headless
@@ -92,6 +97,8 @@ amazon_config = None
 
 
 class Amazon:
+    q = multiprocessing.Queue()
+    stopcodes = multiprocessing.Array('B', 10)
     def __init__(
         self,
         notification_handler,
@@ -109,6 +116,8 @@ class Amazon:
         shipping_bypass=False,
         alt_offers=False,
     ):
+        self.name_displayed = "Unknown"
+        self.lowest_price = 2000
         self.notification_handler = notification_handler
         self.asin_list = []
         self.reserve_min = []
@@ -137,20 +146,24 @@ class Amazon:
         self.shipping_bypass = shipping_bypass
         self.unknown_title_notification_sent = False
         self.alt_offers = alt_offers
+        self.asin = ""
+        self.max = 0
+        self.min = 0
+        self.asin_group = 0
+        self.aliases = []
 
-        presence.enabled = not disable_presence
+        # presence.enabled = not disable_presence
 
-        global amazon_config
         from cli.cli import global_config
 
-        amazon_config = global_config.get_amazon_config(encryption_pass)
+        self.amazon_config = global_config.get_amazon_config(encryption_pass)
         self.profile_path = global_config.get_browser_profile_path()
 
-        try:
-            presence.start_presence()
-        except Exception in pyexceptions:
-            log.error("Discord presence failed to load")
-            presence.enabled = False
+        # try:
+        #     presence.start_presence()
+        # except Exception in pyexceptions:
+        #     log.error("Discord presence failed to load")
+        #     presence.enabled = False
 
         # Create necessary sub-directories if they don't exist
         if not os.path.exists("screenshots"):
@@ -177,6 +190,7 @@ class Amazon:
                         self.asin_list.append(config[f"asin_list_{x + 1}"])
                         self.reserve_min.append(float(config[f"reserve_min_{x + 1}"]))
                         self.reserve_max.append(float(config[f"reserve_max_{x + 1}"]))
+                        self.aliases.append(config[f"asin_alias_list_{x + 1}"])
                     # assert isinstance(self.asin_list, list)
                 except Exception as e:
                     log.error(f"{e} is missing")
@@ -190,9 +204,10 @@ class Amazon:
             )
             exit(0)
 
+    def run(self, asin, asin_group, max, min, delay=DEFAULT_REFRESH_DELAY, test=False):
+        win32api.SetConsoleCtrlHandler(self.on_exit, True)
         if not self.create_driver(self.profile_path):
             exit(1)
-
         for key in AMAZON_URLS.keys():
             AMAZON_URLS[key] = AMAZON_URLS[key].format(domain=self.amazon_website)
         if self.alt_offers:
@@ -200,8 +215,10 @@ class Amazon:
             self.ACTIVE_OFFER_URL = AMAZON_URLS["ALT_OFFER_URL"]
         else:
             self.ACTIVE_OFFER_URL = AMAZON_URLS["OFFER_URL"]
-
-    def run(self, delay=DEFAULT_REFRESH_DELAY, test=False):
+        self.max = max
+        self.min = min
+        self.asin = asin
+        self.asin_group = asin_group
         self.testing = test
         self.refresh_delay = delay
         self.show_config()
@@ -267,7 +284,7 @@ class Amazon:
                     and not self.single_shot
                     and self.great_success
                 ):
-                    self.remove_asin_list(asin)
+                    self.asin = None
                 # checkout loop limiters
                 elif self.checkout_retry > DEFAULT_MAX_PTC_TRIES:
                     self.try_to_checkout = False
@@ -280,7 +297,7 @@ class Amazon:
                     self.fail_to_checkout_note()
                     self.try_to_checkout = False
             # if no items left it list, let loop end
-            if not self.asin_list:
+            if not self.asin:
                 keep_going = False
         runtime = time.time() - self.start_time
         log.info(f"FairGame bot ran for {runtime} seconds.")
@@ -322,7 +339,7 @@ class Amazon:
     def is_logged_in(self):
         try:
             text = self.driver.find_element_by_id("nav-link-accountList").text
-            return not any(sign_in in text for sign_in in amazon_config["SIGN_IN_TEXT"])
+            return not any(sign_in in text for sign_in in self.amazon_config["SIGN_IN_TEXT"])
         except sel_exceptions.NoSuchElementException:
 
             return False
@@ -350,7 +367,7 @@ class Amazon:
 
         if email_field:
             try:
-                email_field.send_keys(amazon_config["username"] + Keys.RETURN)
+                email_field.send_keys(self.amazon_config["username"] + Keys.RETURN)
             except sel_exceptions.ElementNotInteractableException:
                 log.info("Email not needed.")
         else:
@@ -401,7 +418,7 @@ class Amazon:
 
         captcha_entry = []
         if password_field:
-            password_field.send_keys(amazon_config["password"])
+            password_field.send_keys(self.amazon_config["password"])
             # check for captcha
             try:
                 captcha_entry = self.driver.find_element_by_xpath(
@@ -415,29 +432,26 @@ class Amazon:
 
         if captcha_entry:
             self.handle_captcha(False)
-        if self.driver.title in amazon_config["TWOFA_TITLES"]:
+        if self.driver.title in self.amazon_config["TWOFA_TITLES"]:
             log.info("enter in your two-step verification code in browser")
-            while self.driver.title in amazon_config["TWOFA_TITLES"]:
+            while self.driver.title in self.amazon_config["TWOFA_TITLES"]:
                 # Wait for the user to enter 2FA
                 time.sleep(2)
-        log.info(f'Logged in as {amazon_config["username"]}')
+        log.info(f'Logged in as {self.amazon_config["username"]}')
 
     @debug
     def run_asins(self, delay):
         found_asin = False
         while not found_asin:
-            for i in range(len(self.asin_list)):
-                for asin in self.asin_list[i]:
-                    # start_time = time.time()
-                    if self.log_stock_check:
-                        log.info(f"Checking ASIN: {asin}.")
-                    if self.check_stock(asin, self.reserve_min[i], self.reserve_max[i]):
-                        return asin
-                    # log.info(f"check time took {time.time()-start_time} seconds")
-                    time.sleep(delay)
+            if self.log_stock_check:
+                log.info(f"Checking ASIN: {self.asin}.")
+            if self.check_stock():
+                return self.asin
+            # log.info(f"check time took {time.time()-start_time} seconds")
+            time.sleep(delay)
 
     @debug
-    def check_stock(self, asin, reserve_min, reserve_max, retry=0):
+    def check_stock(self, retry=0):
         if retry > DEFAULT_MAX_ATC_TRIES:
             log.info("max add to cart retries hit, returning to asin check")
             return False
@@ -445,23 +459,23 @@ class Amazon:
         if self.alt_offers:
             if self.checkshipping:
                 if self.used:
-                    f = furl(self.ACTIVE_OFFER_URL + asin)
+                    f = furl(self.ACTIVE_OFFER_URL + self.asin)
                 else:
-                    f = furl(self.ACTIVE_OFFER_URL + asin + "/ref=olp_f_new&f_new=true")
+                    f = furl(self.ACTIVE_OFFER_URL + self.asin + "/ref=olp_f_new&f_new=true")
             else:
                 if self.used:
-                    f = furl(self.ACTIVE_OFFER_URL + asin + "/f_freeShipping=on")
+                    f = furl(self.ACTIVE_OFFER_URL + self.asin + "/f_freeShipping=on")
                 else:
                     f = furl(
                         self.ACTIVE_OFFER_URL
-                        + asin
+                        + self.asin
                         + "/ref=olp_f_new&f_new=true&f_freeShipping=on"
                     )
         else:
             # Force the flyout by default
-            f = furl(self.ACTIVE_OFFER_URL + asin + "/#aod")
+            f = furl(self.ACTIVE_OFFER_URL + self.asin + "/#aod")
         fail_counter = 0
-        presence.searching_update()
+        # presence.searching_update()
 
         # handles initial page load only
         while True:
@@ -469,7 +483,7 @@ class Amazon:
                 self.get_page(f.url)
                 log.debug(f"Initial page title {self.driver.title}")
                 log.debug(f"        page url: {self.driver.current_url}")
-                if self.driver.title in amazon_config["CAPTCHA_PAGE_TITLES"]:
+                if self.driver.title in self.amazon_config["CAPTCHA_PAGE_TITLES"]:
                     self.handle_captcha()
                 break
             except Exception:
@@ -510,6 +524,8 @@ class Amazon:
 
         timeout = self.get_timeout()
         while True:
+            if (self.asin_group + 1) in self.stopcodes:
+                exit()
             # Sanity check to see if we have any offers
             try:
                 # Wait for the page to load before determining what's in it by looking for the footer
@@ -521,7 +537,7 @@ class Amazon:
                     )
                 )
                 if footer and footer[0].tag_name == "img":
-                    log.info(f"Saw dogs for {asin}.  Skipping...")
+                    log.info(f"Saw dogs for {self.asin}.  Skipping...")
                     return False
 
                 log.debug(f"After footer page title {self.driver.title}")
@@ -540,7 +556,7 @@ class Amazon:
                 offer_id = offers.get_attribute("id")
                 if offer_id == "outOfStock" or offer_id == "backInStock":
                     # No dice... Early out and move on
-                    log.info("Item is currently unavailable.  Moving on...")
+                    log.debug("Item is currently unavailable.  Moving on...")
                     return False
 
                 if offer_id == "olpOfferList":
@@ -622,10 +638,10 @@ class Amazon:
 
                     return False
                 if len(offer_count) == 0:
-                    log.info("No offers found.  Moving on.")
+                    log.debug("No offers found.  Moving on.")
                     return False
-                log.info(
-                    f"Found {len(offer_count)} offers for {asin}.  Evaluating offers..."
+                log.debug(
+                    f"Found {len(offer_count)} offers for {self.asin}.  Evaluating offers..."
                 )
 
             except sel_exceptions.TimeoutException as te:
@@ -671,10 +687,10 @@ class Amazon:
             except sel_exceptions.NoSuchElementException:
                 pass
 
-            if test and (test.text in amazon_config["NO_SELLERS"]):
+            if test and (test.text in self.amazon_config["NO_SELLERS"]):
                 return False
             if time.time() > timeout:
-                log.info(f"failed to load page for {asin}, going to next ASIN")
+                log.info(f"failed to load page for {self.asin}, going to next ASIN")
                 return False
 
         timeout = self.get_timeout()
@@ -694,7 +710,7 @@ class Amazon:
             if prices:
                 break
             if time.time() > timeout:
-                log.info(f"failed to load prices for {asin}, going to next ASIN")
+                log.info(f"failed to load prices for {self.asin}, going to next ASIN")
                 return False
         shipping = []
         shipping_prices = []
@@ -710,7 +726,7 @@ class Amazon:
                     for idx, shipping_node in enumerate(shipping):
                         log.debug(f"Processing shipping node {idx}")
                         if self.checkshipping:
-                            if amazon_config["SHIPPING_ONLY_IF"] in shipping_node.text:
+                            if self.amazon_config["SHIPPING_ONLY_IF"] in shipping_node.text:
                                 shipping_prices.append(parse_price("0"))
                             else:
                                 shipping_prices.append(parse_price(shipping_node.text))
@@ -724,13 +740,13 @@ class Amazon:
                     for idx, offer in enumerate(offers):
                         tree = html.fromstring(offer.get_attribute("innerHTML"))
                         shipping_prices.append(
-                            get_shipping_costs(tree, amazon_config["FREE_SHIPPING"])
+                            get_shipping_costs(tree, self.amazon_config["FREE_SHIPPING"])
                         )
                 if shipping_prices:
                     break
 
                 if time.time() > timeout:
-                    log.info(f"failed to load shipping for {asin}, going to next ASIN")
+                    log.info(f"failed to load shipping for {self.asin}, going to next ASIN")
                     return False
 
         in_stock = False
@@ -778,13 +794,16 @@ class Amazon:
                 return False
             if ship_float is None or not self.checkshipping:
                 ship_float = 0
-
+            total_price = ship_float + price_float
+            if total_price < self.lowest_price:
+                self.lowest_price = total_price
+                log.info(f"{self.asin} was found for a new minimum price of ${total_price}.")
             if (
-                (ship_float + price_float) <= reserve_max
-                or math.isclose((price_float + ship_float), reserve_max, abs_tol=0.01)
+                total_price <= self.max
+                or math.isclose(total_price, self.max, abs_tol=0.01)
             ) and (
-                (ship_float + price_float) >= reserve_min
-                or math.isclose((price_float + ship_float), reserve_min, abs_tol=0.01)
+                total_price >= self.min
+                or math.isclose(total_price, self.min, abs_tol=0.01)
             ):
                 log.info("Item in stock and in reserve range!")
                 log.info("Adding to cart")
@@ -814,12 +833,12 @@ class Amazon:
                     self.notification_handler.play_notify_sound()
                     if self.detailed:
                         self.send_notification(
-                            message=f"Found Stock ASIN:{asin}",
+                            message=f"Found Stock ASIN:{self.asin}",
                             page_name="Stock Alert",
                             take_screenshot=self.take_screenshots,
                         )
 
-                    presence.buy_update()
+                    # presence.buy_update()
                     current_title = self.driver.title
                     # log.info(f"current page title is {current_title}")
                     try:
@@ -835,7 +854,7 @@ class Amazon:
 
                     if (
                         not emtpy_cart_elements
-                        and self.driver.title in amazon_config["SHOPPING_CART_TITLES"]
+                        and self.driver.title in self.amazon_config["SHOPPING_CART_TITLES"]
                     ):
                         return True
                     else:
@@ -850,9 +869,6 @@ class Amazon:
                         )
                         self.save_page_source("failed-atc")
                         in_stock = self.check_stock(
-                            asin=asin,
-                            reserve_max=reserve_max,
-                            reserve_min=reserve_min,
                             retry=retry + 1,
                         )
         return in_stock
@@ -883,13 +899,10 @@ class Amazon:
 
     # search lists of asin lists, and remove the first list that matches provided asin
     @debug
-    def remove_asin_list(self, asin):
-        for i in range(len(self.asin_list)):
-            if asin in self.asin_list[i]:
-                self.asin_list.pop(i)
-                self.reserve_max.pop(i)
-                self.reserve_min.pop(i)
-                break
+    def remove_asin_list(self):
+        self.asin = None
+        self.max = None
+        self.min = None
 
     # checkout page navigator
     @debug
@@ -914,28 +927,28 @@ class Amazon:
                 if time.time() > timeout:
                     log.debug("Time out reached, page title was still blank.")
                     break
-        if title in amazon_config["SIGN_IN_TITLES"]:
+        if title in self.amazon_config["SIGN_IN_TITLES"]:
             self.login()
-        elif title in amazon_config["CAPTCHA_PAGE_TITLES"]:
+        elif title in self.amazon_config["CAPTCHA_PAGE_TITLES"]:
             self.handle_captcha()
-        elif title in amazon_config["SHOPPING_CART_TITLES"]:
+        elif title in self.amazon_config["SHOPPING_CART_TITLES"]:
             self.handle_cart()
-        elif title in amazon_config["CHECKOUT_TITLES"]:
+        elif title in self.amazon_config["CHECKOUT_TITLES"]:
             self.handle_checkout(test)
-        elif title in amazon_config["ORDER_COMPLETE_TITLES"]:
+        elif title in self.amazon_config["ORDER_COMPLETE_TITLES"]:
             self.handle_order_complete()
-        elif title in amazon_config["PRIME_TITLES"]:
+        elif title in self.amazon_config["PRIME_TITLES"]:
             self.handle_prime_signup()
-        elif title in amazon_config["HOME_PAGE_TITLES"]:
+        elif title in self.amazon_config["HOME_PAGE_TITLES"]:
             # if home page, something went wrong
             self.handle_home_page()
-        elif title in amazon_config["DOGGO_TITLES"]:
+        elif title in self.amazon_config["DOGGO_TITLES"]:
             self.handle_doggos()
-        elif title in amazon_config["OUT_OF_STOCK"]:
+        elif title in self.amazon_config["OUT_OF_STOCK"]:
             self.handle_out_of_stock()
-        elif title in amazon_config["BUSINESS_PO_TITLES"]:
+        elif title in self.amazon_config["BUSINESS_PO_TITLES"]:
             self.handle_business_po()
-        elif title in amazon_config["ADDRESS_SELECT"]:
+        elif title in self.amazon_config["ADDRESS_SELECT"]:
             if not self.unknown_title_notification_sent:
                 self.notification_handler.play_alarm_sound()
                 self.send_notification(
@@ -1162,7 +1175,7 @@ class Amazon:
                 "Prime offer page popped up, user intervention required"
             )
             timeout = self.get_timeout(timeout=60)
-            while self.driver.title in amazon_config["PRIME_TITLES"]:
+            while self.driver.title in self.amazon_config["PRIME_TITLES"]:
                 if time.time() > timeout:
                     log.info(
                         "user did not intervene in time, will try and refresh page"
@@ -1296,7 +1309,7 @@ class Amazon:
             self.try_to_checkout = False
             self.great_success = True
             if self.single_shot:
-                self.asin_list = []
+                self.asin = None
         else:
             log.info(f"Clicking Button {button.text} to place order")
             button.click()
@@ -1466,6 +1479,7 @@ class Amazon:
         except sel_exceptions.NoSuchElementException:
             current_page = self.driver.title
         try:
+            log.debug(f"Loading page at url: {url}")
             self.driver.get(url=url)
         except sel_exceptions.WebDriverException or sel_exceptions.TimeoutException:
             log.error(f"failed to load page at url: {url}")
@@ -1486,8 +1500,8 @@ class Amazon:
             log.error("page did not change")
             return False
 
-    def __del__(self):
-        self.delete_driver()
+    # def __del__(self):
+    #     self.delete_driver()
 
     def show_config(self):
         log.info(f"{'=' * 50}")
@@ -1528,12 +1542,11 @@ class Amazon:
                 f"bot may still fail during checkout if defaults are not set on Amazon's site."
             )
             log.warning(f"{'=' * 50}")
-        for idx, asins in enumerate(self.asin_list):
-            log.info(
-                f"--Looking for {len(asins)} ASINs between {self.reserve_min[idx]:.2f} and {self.reserve_max[idx]:.2f}"
-            )
-        if not presence.enabled:
-            log.info(f"--Discord Presence feature is disabled.")
+        log.info(
+            f"--Looking for ASIN {self.asin} between {self.min:.2f} and {self.max:.2f}"
+        )
+        # if not presence.enabled:
+        #     log.info(f"--Discord Presence feature is disabled.")
         if self.no_image:
             log.info(f"--No images will be requested")
         if not self.notification_handler.sound_enabled:
@@ -1559,7 +1572,7 @@ class Amazon:
             else:
                 prefs["profile.managed_default_content_settings.images"] = 0
             options.add_experimental_option("prefs", prefs)
-            options.add_argument(f"user-data-dir={path_to_profile}")
+            options.add_argument(f"user-data-dir={path_to_profile}-{multiprocessing.current_process().name}")
             if not self.slow_mode:
                 options.set_capability("pageLoadStrategy", "none")
 
@@ -1581,6 +1594,7 @@ class Amazon:
             self.driver = webdriver.Chrome(executable_path=binary_path, options=options)
             self.wait = WebDriverWait(self.driver, 10)
             self.get_webdriver_pids()
+            # self.driver.minimize_window()
         except Exception as e:
             log.error(e)
             log.error(
@@ -1618,6 +1632,42 @@ class Amazon:
             return False
         return True
 
+    def handler(self, delay, test):
+        log.info('Killing leftover processes...')
+        killdupes.killdupes()
+        time.sleep(4)
+        count = 0
+        for y in range(self.asin_groups):
+            for z in self.asin_list[y]:
+                count += 1
+        log.info('Creating bot hider...')
+        process = multiprocessing.Process(target=hidebots.hidebots, kwargs={"count": count}, name='Hider')
+        process.start()
+        for i in range(self.asin_groups):
+            for x, asin in enumerate(self.asin_list[i]):
+                log.info(f'Creating worker {self.aliases[i][x]}...')
+                process = multiprocessing.Process(target=Amazon.run, kwargs={"self": self, "delay": delay, "test": test, "asin": asin, "asin_group": i, "max": self.reserve_max[i], "min": self.reserve_min[i]}, name=self.aliases[i][x])
+                process.start()
+        win32api.SetConsoleCtrlHandler(self.on_boss_exit, True)
+        while not all(elem in range(self.asin_groups + 1) for elem in self.stopcodes):
+            msg = self.q.get()
+            if isinstance(msg, int):
+                self.stopcodes[msg-1] = msg
+            else:
+                exit()
+
+    def on_exit(self, sig):
+        self.delete_driver()
+        print("CMD window closed, exiting...")
+        time.sleep(3)
+
+    def on_boss_exit(self, sig):
+        process = multiprocessing.Process(target=destroybots.destroybots, name='Terminator')
+        process.start()
+        self.delete_driver()
+        print("CMD window closed, exiting...")
+        time.sleep(3)
+        exit()
 
 def get_timestamp_filename(name, extension):
     """Utility method to create a filename with a timestamp appended to the root and before
@@ -1720,7 +1770,7 @@ def get_shipping_costs(tree, free_shipping_string) -> Price:
                 log.debug("Found Free shipping with Prime")
         elif any(
             shipping_span_text.upper() in free_message
-            for free_message in amazon_config["FREE_SHIPPING"]
+            for free_message in free_shipping_string
         ):
             # We found some version of "free" inside the span.. but this relies on a match
             log.warning(

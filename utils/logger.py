@@ -22,8 +22,9 @@ import logging
 import os
 from utils.version import version
 from logging import handlers
+import multiprocessing
 
-FORMAT = "%(asctime)s|{}|%(levelname)s|%(message)s".format(version)
+FORMAT = "%(asctime)s|{%(processName)s}|%(levelname)s|%(message)s"
 
 LOG_DIR = "logs"
 LOG_FILE_NAME = "fairgame.log"

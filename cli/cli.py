@@ -42,9 +42,10 @@ import time
 from notifications.notifications import NotificationHandler, TIME_FORMAT
 from utils.logger import log
 from common.globalconfig import GlobalConfig, AMAZON_CREDENTIAL_FILE
-from utils.version import is_latest, version
+# from utils.version import is_latest, version
 from stores.amazon import Amazon
 from stores.bestbuy import BestBuyHandler
+import ctypes
 
 
 def get_folder_size(folder):
@@ -215,7 +216,7 @@ def amazon(
     shipping_bypass,
     clean_profile,
     clean_credentials,
-    alt_offers,
+    alt_offers
 ):
     notification_handler.sound_enabled = not disable_sound
     if not notification_handler.sound_enabled:
@@ -247,10 +248,14 @@ def amazon(
         encryption_pass=p,
         log_stock_check=log_stock_check,
         shipping_bypass=shipping_bypass,
-        alt_offers=alt_offers,
+        alt_offers=alt_offers
     )
+    ES_CONTINUOUS = 0x80000000
+    ES_SYSTEM_REQUIRED = 0x00000001
+    ctypes.windll.kernel32.SetThreadExecutionState(
+        ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
     try:
-        amzn_obj.run(delay=delay, test=test)
+        amzn_obj.handler(delay=delay, test=test)
     except RuntimeError:
         del amzn_obj
         log.error("Exiting Program...")
@@ -336,15 +341,15 @@ main.add_command(test_notifications)
 main.add_command(show)
 
 # Global scope stuff here
-if is_latest():
-    log.info(f"FairGame v{version}")
-elif version.is_prerelease:
-    log.warning(f"FairGame PRE-RELEASE v{version}")
-else:
-    log.warning(
-        f"You are running FairGame v{version.release}, but the most recent version is v{version.get_latest_version()}. "
-        f"Consider upgrading "
-    )
+# if is_latest():
+#     log.info(f"FairGame v{version}")
+# elif version.is_prerelease:
+#     log.warning(f"FairGame PRE-RELEASE v{version}")
+# else:
+#     log.warning(
+#         f"You are running FairGame v{version.release}, but the most recent version is v{version.get_latest_version()}. "
+#         f"Consider upgrading "
+#     )
 
 global_config = GlobalConfig()
 notification_handler = NotificationHandler()
