@@ -65,6 +65,10 @@ CHECKOUT_URL = "https://{domain}/gp/cart/desktop/go-to-checkout.html/ref=ox_sc_p
 
 AUTOBUY_CONFIG_PATH = "config/amazon_config.json"
 
+USE_ADDRESS_XPATHS = [
+    '//*[@id="shipToThisAddressButton"]/span/input'
+]
+
 BUTTON_XPATHS = [
     '//input[@name="placeYourOrder1"]',
     '//*[@id="submitOrderButtonId"]/span/input',
@@ -123,6 +127,7 @@ class Amazon:
         self.reserve_max = []
         self.checkshipping = checkshipping
         self.button_xpaths = BUTTON_XPATHS
+        self.use_address_xpaths = USE_ADDRESS_XPATHS
         self.detailed = detailed
         self.used = used
         if used:
@@ -666,20 +671,20 @@ class Amazon:
             atc_buttons: WebElement = self.driver.find_elements_by_xpath(
                 "//div[@id='aod-pinned-offer' or @id='aod-offer' or @id='olpOfferList']//input[@name='submit.addToCart']"
             )
-            # if not atc_buttons:
-            #     # Sanity check to see if we have a valid page, but no offers:
-            #     offer_count = WebDriverWait(self.driver, timeout=25).until(
-            #         lambda d: d.find_element_by_xpath(
-            #             "//div[@id='aod-offer-list']//input[@id='aod-total-offer-count']"
-            #         )
-            #     )
-            #
-            #     # offer_count = self.driver.find_element_by_xpath(
-            #     #     "//div[@id='aod-offer-list']//input[@id='aod-total-offer-count']"
-            #     # )
-            #     if offer_count.get_attribute("value") == "0":
-            #         log.info("Found zero offers explicitly.  Moving to next ASIN.")
-            #         return False
+            if not atc_buttons:
+                # Sanity check to see if we have a valid page, but no offers:
+                offer_count = WebDriverWait(self.driver, timeout=25).until(
+                    lambda d: d.find_element_by_xpath(
+                        "//div[@id='aod-offer-list']//input[@id='aod-total-offer-count']"
+                    )
+                )
+
+                # offer_count = self.driver.find_element_by_xpath(
+                #     "//div[@id='aod-offer-list']//input[@id='aod-total-offer-count']"
+                # )
+                if offer_count.get_attribute("value") == "0":
+                    log.info("Found zero offers explicitly.  Moving to next ASIN.")
+                    return False
             if atc_buttons:
                 # Early out if we found buttons
                 break
@@ -811,7 +816,7 @@ class Amazon:
                 or math.isclose(total_price, self.min, abs_tol=0.01)
             ):
                 log.info("Item in stock and in reserve range!")
-                self.hq.put(self.webdriver_child_pids[0])
+                self.hq.put((self.webdriver_child_pids[0], True))
                 log.info("Adding to cart")
                 # Get the offering ID
                 offering_id_elements = atc_button.find_elements_by_xpath(
@@ -831,6 +836,7 @@ class Amazon:
                             self.take_screenshots,
                         )
                         self.save_page_source("failed-atc")
+                        self.hq.put((self.webdriver_child_pids[0], False))
                         return False
                 else:
                     log.error(
@@ -1283,10 +1289,18 @@ class Amazon:
 
     @debug
     def handle_checkout(self, test):
-        previous_title = self.driver.title
+        previous_title = self.driver.title1
         button = None
         timeout = self.get_timeout()
         while True:
+            try:
+                button = self.driver.find_element_by_xpath(self.use_address_xpaths[0])
+                if button.is_enabled() and button.is_displayed():
+                    log.info("Clicking 'Use this address' button.")
+                    button.click()
+                    time.sleep(1)
+            except sel_exceptions.NoSuchElementException:
+                pass
             try:
                 button = self.driver.find_element_by_xpath(self.button_xpaths[0])
             except sel_exceptions.NoSuchElementException:

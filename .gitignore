@@ -21,3 +21,5 @@ geckodriver.log
 html_saves/*.html
 screenshots/*.png
 logs/*.log*
+/amazon.vbs
+/Amazon Bot.lnk

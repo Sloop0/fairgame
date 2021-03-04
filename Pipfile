@@ -35,6 +35,8 @@ stdiomask = "*"
 packaging = "*"
 config = "*"
 lxml = "*"
+pyqt5 = "*"
+pyside6 = "*"
 
 [requires]
 python_version = "3.8"
