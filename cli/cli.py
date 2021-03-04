@@ -23,12 +23,16 @@ from datetime import datetime
 from functools import wraps
 from pathlib import Path
 from signal import signal, SIGINT
+import multiprocessing
+import win32api
+import destroybots
+
+multiprocessing.current_process().name = "Handler"
 
 LICENSE_PATH = os.path.join(
     "cli",
     "license",
 )
-
 
 try:
     import click
@@ -37,7 +41,6 @@ except ModuleNotFoundError as e:
     print("Install the missing module noted above.")
     exit(0)
 import time
-
 
 from notifications.notifications import NotificationHandler, TIME_FORMAT
 from utils.logger import log
@@ -62,6 +65,8 @@ def sizeof_fmt(num, suffix="B"):
 
 def handler(signal, frame):
     log.info("Caught the stop, exiting.")
+    process = multiprocessing.Process(target=destroybots.destroybots, name='Terminator')
+    process.start()
     exit(0)
 
 
@@ -81,7 +86,6 @@ def notify_on_crash(func):
 
 @click.group()
 def main():
-
     pass
 
 
@@ -199,24 +203,24 @@ def main():
 )
 @notify_on_crash
 def amazon(
-    no_image,
-    headless,
-    test,
-    delay,
-    checkshipping,
-    detailed,
-    used,
-    single_shot,
-    no_screenshots,
-    disable_presence,
-    disable_sound,
-    slow_mode,
-    p,
-    log_stock_check,
-    shipping_bypass,
-    clean_profile,
-    clean_credentials,
-    alt_offers
+        no_image,
+        headless,
+        test,
+        delay,
+        checkshipping,
+        detailed,
+        used,
+        single_shot,
+        no_screenshots,
+        disable_presence,
+        disable_sound,
+        slow_mode,
+        p,
+        log_stock_check,
+        shipping_bypass,
+        clean_profile,
+        clean_credentials,
+        alt_offers
 ):
     notification_handler.sound_enabled = not disable_sound
     if not notification_handler.sound_enabled:
@@ -333,7 +337,7 @@ def show(w, c):
         exit(0)
 
 
-signal(SIGINT, handler)
+# signal(SIGINT, handler)
 
 main.add_command(amazon)
 main.add_command(bestbuy)

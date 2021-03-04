@@ -1,0 +1,1 @@
+_Amazon.bat < nul

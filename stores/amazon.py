@@ -46,6 +46,7 @@ from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 import win32api
+import signal
 
 # from utils import discord_presence as presence
 from utils.debugger import debug
@@ -97,8 +98,6 @@ amazon_config = None
 
 
 class Amazon:
-    q = multiprocessing.Queue()
-    stopcodes = multiprocessing.Array('B', 10)
     def __init__(
         self,
         notification_handler,
@@ -151,6 +150,10 @@ class Amazon:
         self.min = 0
         self.asin_group = 0
         self.aliases = []
+        self.q = None
+        self.hq = None
+        self.stopcodes = None
+        self.proc_list = []
 
         # presence.enabled = not disable_presence
 
@@ -204,8 +207,8 @@ class Amazon:
             )
             exit(0)
 
-    def run(self, asin, asin_group, max, min, delay=DEFAULT_REFRESH_DELAY, test=False):
-        win32api.SetConsoleCtrlHandler(self.on_exit, True)
+    def run(self, asin, asin_group, max, min, boss_queue, hider_queue, stopcodes, delay=DEFAULT_REFRESH_DELAY, test=False):
+        # win32api.SetConsoleCtrlHandler(None, True)
         if not self.create_driver(self.profile_path):
             exit(1)
         for key in AMAZON_URLS.keys():
@@ -218,6 +221,9 @@ class Amazon:
         self.max = max
         self.min = min
         self.asin = asin
+        self.q = boss_queue
+        self.hq = hider_queue
+        self.stopcodes = stopcodes
         self.asin_group = asin_group
         self.testing = test
         self.refresh_delay = delay
@@ -260,11 +266,9 @@ class Amazon:
             return
 
         keep_going = True
-
         log.info("Checking stock for items.")
-
         while keep_going:
-            asin = self.run_asins(delay)
+            self.run_asins(delay)
             # found something in stock and under reserve
             # initialize loop limiter variables
             self.try_to_checkout = True
@@ -299,6 +303,7 @@ class Amazon:
             # if no items left it list, let loop end
             if not self.asin:
                 keep_going = False
+        self.q.put(self.prod_group + 1)
         runtime = time.time() - self.start_time
         log.info(f"FairGame bot ran for {runtime} seconds.")
         time.sleep(10)  # add a delay to shut stuff done
@@ -806,6 +811,7 @@ class Amazon:
                 or math.isclose(total_price, self.min, abs_tol=0.01)
             ):
                 log.info("Item in stock and in reserve range!")
+                self.hq.put(self.webdriver_child_pids[0])
                 log.info("Adding to cart")
                 # Get the offering ID
                 offering_id_elements = atc_button.find_elements_by_xpath(
@@ -1500,8 +1506,8 @@ class Amazon:
             log.error("page did not change")
             return False
 
-    # def __del__(self):
-    #     self.delete_driver()
+    def __del__(self):
+        self.delete_driver()
 
     def show_config(self):
         log.info(f"{'=' * 50}")
@@ -1632,6 +1638,24 @@ class Amazon:
             return False
         return True
 
+
+    def on_exit(self, sig, frame):
+        self.delete_driver()
+        exit()
+
+    def on_boss_exit(self, sig, frame):
+        destroybots.destroybots()
+        for p in self.proc_list:
+            try:
+                proc = psutil.Process(p)
+                proc.terminate()
+            except psutil.Error:
+                log.info(f'Unable to terminate process {p}.')
+        self.delete_driver()
+        print("CTRL-C invoked or command window closed, exiting...")
+        time.sleep(3)
+        exit()
+
     def handler(self, delay, test):
         log.info('Killing leftover processes...')
         killdupes.killdupes()
@@ -1640,34 +1664,32 @@ class Amazon:
         for y in range(self.asin_groups):
             for z in self.asin_list[y]:
                 count += 1
+        self.hq = multiprocessing.Queue()
         log.info('Creating bot hider...')
-        process = multiprocessing.Process(target=hidebots.hidebots, kwargs={"count": count}, name='Hider')
+        process = multiprocessing.Process(target=hidebots.hidebots, kwargs={"count": count, "queue": self.hq}, name='Hider')
         process.start()
+        self.proc_list.append(process.pid)
+        self.q = multiprocessing.Queue()
+        self.stopcodes = multiprocessing.Array('B', 10)
         for i in range(self.asin_groups):
             for x, asin in enumerate(self.asin_list[i]):
                 log.info(f'Creating worker {self.aliases[i][x]}...')
-                process = multiprocessing.Process(target=Amazon.run, kwargs={"self": self, "delay": delay, "test": test, "asin": asin, "asin_group": i, "max": self.reserve_max[i], "min": self.reserve_min[i]}, name=self.aliases[i][x])
+                process = multiprocessing.Process(target=Amazon.run, kwargs={"self": self, "delay": delay, "test": test, "asin": asin, "asin_group": i, "max": self.reserve_max[i], "min": self.reserve_min[i], "boss_queue": self.q, "hider_queue": self.hq, "stopcodes": self.stopcodes}, name=self.aliases[i][x])
                 process.start()
-        win32api.SetConsoleCtrlHandler(self.on_boss_exit, True)
+                self.proc_list.append(process.pid)
+        # win32api.SetConsoleCtrlHandler(self.on_boss_exit, True)
+        signal.signal(signal.SIGINT, self.on_boss_exit)
         while not all(elem in range(self.asin_groups + 1) for elem in self.stopcodes):
-            msg = self.q.get()
-            if isinstance(msg, int):
-                self.stopcodes[msg-1] = msg
-            else:
-                exit()
+            try:
+                msg = self.q.get(timeout=2)
+                if isinstance(msg, int):
+                    self.stopcodes[msg-1] = msg
+                else:
+                    exit()
+            except self.q.empty:
+                pass
 
-    def on_exit(self, sig):
-        self.delete_driver()
-        print("CMD window closed, exiting...")
-        time.sleep(3)
 
-    def on_boss_exit(self, sig):
-        process = multiprocessing.Process(target=destroybots.destroybots, name='Terminator')
-        process.start()
-        self.delete_driver()
-        print("CMD window closed, exiting...")
-        time.sleep(3)
-        exit()
 
 def get_timestamp_filename(name, extension):
     """Utility method to create a filename with a timestamp appended to the root and before
@@ -1679,6 +1701,8 @@ def get_timestamp_filename(name, extension):
     else:
         return name + "_" + date + "." + extension
 
+def on_terminate(proc):
+    print("process {} terminated with exit code {}".format(proc, proc.returncode))
 
 def get_shipping_costs(tree, free_shipping_string) -> Price:
     # Assume Free Shipping and change otherwise
