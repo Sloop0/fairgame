@@ -47,6 +47,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 import win32api
 import signal
+from notifications.notifications import NotificationHandler, TIME_FORMAT
 
 # from utils import discord_presence as presence
 from utils.debugger import debug
@@ -104,7 +105,6 @@ amazon_config = None
 class Amazon:
     def __init__(
         self,
-        notification_handler,
         headless=False,
         checkshipping=False,
         detailed=False,
@@ -121,7 +121,7 @@ class Amazon:
     ):
         self.name_displayed = "Unknown"
         self.lowest_price = 2000
-        self.notification_handler = notification_handler
+        self.notification_handler = None
         self.asin_list = []
         self.reserve_min = []
         self.reserve_max = []
@@ -213,7 +213,7 @@ class Amazon:
             exit(0)
 
     def run(self, asin, asin_group, max, min, boss_queue, hider_queue, stopcodes, delay=DEFAULT_REFRESH_DELAY, test=False):
-        # win32api.SetConsoleCtrlHandler(None, True)
+        self.notification_handler = NotificationHandler()
         if not self.create_driver(self.profile_path):
             exit(1)
         for key in AMAZON_URLS.keys():
@@ -543,7 +543,7 @@ class Amazon:
                     self.driver, timeout=DEFAULT_MAX_TIMEOUT
                 ).until(
                     lambda d: d.find_elements_by_xpath(
-                        "//div[@class='nav-footer-line'] | //img[@alt='Dogs of Amazon']"
+                        "//div[@class='nav-footer-line'] | //div[@class='navFooterLine'] | //img[@alt='Dogs of Amazon']"
                     )
                 )
                 if footer and footer[0].tag_name == "img":
@@ -658,6 +658,7 @@ class Amazon:
                 log.error("Timed out waiting for offers to render.  Skipping...")
                 log.error(f"URL: {self.driver.current_url}")
                 log.exception(te)
+                self.save_page_source("timed-out")
                 return False
             except sel_exceptions.NoSuchElementException:
                 log.error("Unable to find any offers listing.  Skipping...")

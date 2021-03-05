@@ -78,7 +78,7 @@ def notify_on_crash(func):
         except KeyboardInterrupt:
             pass
         except:
-            notification_handler.send_notification(f"FairGame has crashed.")
+            NotificationHandler.send_notification(f"FairGame has crashed.")
             raise
 
     return decorator
@@ -222,9 +222,9 @@ def amazon(
         clean_credentials,
         alt_offers
 ):
-    notification_handler.sound_enabled = not disable_sound
-    if not notification_handler.sound_enabled:
-        log.info("Local sounds have been disabled.")
+    # notification_handler.sound_enabled = not disable_sound
+    # if not notification_handler.sound_enabled:
+    #     log.info("Local sounds have been disabled.")
 
     if clean_profile and os.path.exists(global_config.get_browser_profile_path()):
         log.info(
@@ -240,7 +240,7 @@ def amazon(
 
     amzn_obj = Amazon(
         headless=headless,
-        notification_handler=notification_handler,
+        # notification_handler=notification_handler,
         checkshipping=checkshipping,
         detailed=detailed,
         used=used,
@@ -266,25 +266,26 @@ def amazon(
         time.sleep(5)
 
 
-@click.command()
-@click.option("--sku", type=str, required=True)
-@click.option("--headless", is_flag=True)
-@notify_on_crash
-def bestbuy(sku, headless):
-    bb = BestBuyHandler(
-        sku, notification_handler=notification_handler, headless=headless
-    )
-    bb.run_item()
-
-
-@click.option(
-    "--disable-sound",
-    is_flag=True,
-    default=False,
-    help="Disable local sounds.  Does not affect Apprise notification " "sounds.",
-)
+# @click.command()
+# @click.option("--sku", type=str, required=True)
+# @click.option("--headless", is_flag=True)
+# @notify_on_crash
+# def bestbuy(sku, headless):
+#     bb = BestBuyHandler(
+#         sku, notification_handler=notification_handler, headless=headless
+#     )
+#     bb.run_item()
+#
+#
+# @click.option(
+#     "--disable-sound",
+#     is_flag=True,
+#     default=False,
+#     help="Disable local sounds.  Does not affect Apprise notification " "sounds.",
+# )
 @click.command()
 def test_notifications(disable_sound):
+    notification_handler = NotificationHandler()
     enabled_handlers = ", ".join(notification_handler.enabled_handlers)
     message_time = datetime.now().strftime(TIME_FORMAT)
     notification_handler.send_notification(
@@ -340,7 +341,7 @@ def show(w, c):
 # signal(SIGINT, handler)
 
 main.add_command(amazon)
-main.add_command(bestbuy)
+# main.add_command(bestbuy)
 main.add_command(test_notifications)
 main.add_command(show)
 
@@ -356,4 +357,4 @@ main.add_command(show)
 #     )
 
 global_config = GlobalConfig()
-notification_handler = NotificationHandler()
+# notification_handler = NotificationHandler()
