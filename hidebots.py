@@ -17,10 +17,10 @@ def foreach_window(hwnd, lParam):
     if win32gui.IsWindowVisible(hwnd):
         title = win32gui.GetWindowText(hwnd).lower()
         thisdesk = vdesks.GetWindowDesktopNumber(hwnd)
-        exe = ''
         if title.find("amazon") != -1 and thisdesk == 0:
             pid = win32process.GetWindowThreadProcessId(hwnd)
             if len(pid) <= 2:
+                exe = ''
                 for p in pid:
                     try:
                         count = counters[p]

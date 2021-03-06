@@ -45,7 +45,6 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
-import win32api
 import signal
 from notifications.notifications import NotificationHandler, TIME_FORMAT
 
@@ -259,9 +258,9 @@ class Amazon:
         if not self.is_logged_in():
             self.login()
         self.notification_handler.play_notify_sound()
-        self.send_notification(
-            "Bot Logged in and Starting up", "Start-Up", self.take_screenshots
-        )
+        # self.send_notification(
+        #     "Bot Logged in and Starting up", "Start-Up", self.take_screenshots
+        # )
         if self.get_cart_count() > 0:
             log.warning(f"Found {cart_quantity} item(s) in your cart.")
             log.info("Delete all item(s) in cart before starting bot.")
@@ -495,6 +494,13 @@ class Amazon:
                 log.debug(f"        page url: {self.driver.current_url}")
                 if self.driver.title in self.amazon_config["CAPTCHA_PAGE_TITLES"]:
                     self.handle_captcha()
+                try:
+                    self.driver.find_element_by_xpath(
+                        '//form[contains(@action,"validateCaptcha")]'
+                    )
+                    self.handle_captcha()
+                except sel_exceptions.NoSuchElementException:
+                    pass
                 break
             except Exception:
                 fail_counter += 1
@@ -543,9 +549,17 @@ class Amazon:
                     self.driver, timeout=DEFAULT_MAX_TIMEOUT
                 ).until(
                     lambda d: d.find_elements_by_xpath(
-                        "//div[@class='nav-footer-line'] | //div[@class='navFooterLine'] | //img[@alt='Dogs of Amazon']"
+                        "//div[@class='nav-footer-line'] | //div[@class='navFooterLine'] | //img[@alt='Dogs of Amazon'] |"
+                        '//form[contains(@action,"validateCaptcha")]'
                     )
                 )
+                try:
+                    self.driver.find_element_by_xpath(
+                        '//form[contains(@action,"validateCaptcha")]'
+                    )
+                    self.handle_captcha()
+                except sel_exceptions.NoSuchElementException:
+                    pass
                 if footer and footer[0].tag_name == "img":
                     log.info(f"Saw dogs for {self.asin}.  Skipping...")
                     return False
@@ -559,7 +573,8 @@ class Amazon:
                         "//div[@id='olpOfferList'] | "
                         "//div[@id='backInStock' or @id='outOfStock'] |"
                         "//span[@data-action='show-all-offers-display'] | "
-                        "//input[@name='submit.add-to-cart' and not(//span[@data-action='show-all-offers-display'])]"
+                        "//input[@name='submit.add-to-cart' and not(//span[@data-action='show-all-offers-display'])] | "
+                        "//div[contains(@class, 'a-alert-error')]//div[@class='a-alert-content']"
                     )
                 )
                 offer_count = []
@@ -630,6 +645,9 @@ class Amazon:
                         "NOT YET IMPLEMENTED: PDP represents only item worth considering.  No other sellers available."
                         " TODO: Parse pricing and Add To Cart from PDP if item qualifies."
                     )
+                elif offers.get_text().strip() == "We're sorry, an error has occurred. Please reload this page and try again.":
+                    log.debug('Received error page. Reloading...')
+                    return False
                 else:
                     log.warning(
                         "We found elements, but didn't recognize any of the combinations."
@@ -1382,15 +1400,16 @@ class Amazon:
                         self.driver.refresh()
                         time.sleep(3)
                     else:
-                        self.send_notification(
-                            "Solving catpcha", "captcha", self.take_screenshots
-                        )
+                        # self.send_notification(
+                        #     "Solving captcha", "captcha", self.take_screenshots
+                        # )
                         self.driver.find_element_by_xpath(
                             '//*[@id="captchacharacters"]'
                         ).send_keys(solution + Keys.RETURN)
                         self.wait_for_page_change(page_title=current_page)
                 except Exception as e:
                     log.debug(e)
+                    self.send_notification("Error solving captcha. Will retry.", "captcha", self.take_screenshots)
                     log.info("Error trying to solve captcha. Refresh and retry.")
                     self.driver.refresh()
                     time.sleep(3)
@@ -1686,13 +1705,18 @@ class Amazon:
         self.proc_list.append(process.pid)
         self.q = multiprocessing.Queue()
         self.stopcodes = multiprocessing.Array('B', 10)
+        procs = {}
         for i in range(self.asin_groups):
             for x, asin in enumerate(self.asin_list[i]):
                 log.info(f'Creating worker {self.aliases[i][x]}...')
-                process = multiprocessing.Process(target=Amazon.run, kwargs={"self": self, "delay": delay, "test": test, "asin": asin, "asin_group": i, "max": self.reserve_max[i], "min": self.reserve_min[i], "boss_queue": self.q, "hider_queue": self.hq, "stopcodes": self.stopcodes}, name=self.aliases[i][x])
+                kwargs = {"self": self, "delay": delay, "test": test, "asin": asin, "asin_group": i,
+                          "max": self.reserve_max[i], "min": self.reserve_min[i], "boss_queue": self.q,
+                          "hider_queue": self.hq, "stopcodes": self.stopcodes}
+                name = self.aliases[i][x]
+                process = multiprocessing.Process(target=Amazon.run, kwargs=kwargs, name=name)
                 process.start()
                 self.proc_list.append(process.pid)
-        # win32api.SetConsoleCtrlHandler(self.on_boss_exit, True)
+                procs[name] = [process, kwargs]
         signal.signal(signal.SIGINT, self.on_boss_exit)
         while not all(elem in range(self.asin_groups + 1) for elem in self.stopcodes):
             try:
@@ -1702,7 +1726,14 @@ class Amazon:
                 else:
                     exit()
             except self.q.empty:
-                pass
+                for i in procs:
+                    if procs[i][0].exitcode > 0:
+                        log.info(f'Assuming process "{i}" crashed. Re-launching...')
+                        process = multiprocessing.Process(target=Amazon.run, kwargs=procs[i][1], name=i)
+                        process.start()
+                        procs[i] = [process, procs[i][1]]
+                    i += 1
+
 
 
 
